@@ -1,0 +1,56 @@
+#%%
+import numpy as np # linear algebra
+import pandas as pd
+#import multiprocessing
+#import seaborn as sns
+import email
+import matplotlib.pyplot as plt
+
+#data cleaning
+import datetime
+from dateutil import parser
+import string
+
+# %%
+df = pd.read_csv("../data/emails.csv")
+
+#%%
+#parsing out the data
+def extract_metadata(x): #this takes about 14 mins per GB or 250k obs
+    loc = x['message']
+    e = email.message_from_string(loc)
+    to_remove = ' confidentiality notice the information in this email may be confidential andor privileged this email is intended to be reviewed by only the individual or organization named above if you are not the intended recipient or an authorized representative of the intended recipient you are hereby notified that any review dissemination or copying of this email and its attachments if any or the information contained herein is prohibited if you have received this email in error please immediately notify the sender by return email and delete this email from your system thank you confidentiality notice the information in this email may be confidential andor privileged this email is intended to be reviewed by only the individual or organization named above if you are not the intended recipient or an authorized representative of the intended recipient you are hereby notified that any review dissemination or copying of this email and its attachments if any or the information contained herein is prohibited if you have received this email in error please immediately notify the sender by return email and delete this email from your system thank you'
+
+
+    dictx = dict(e.items()) #probably a speedup here from https://stackoverflow.com/questions/16236684/apply-pandas-function-to-column-to-create-multiple-new-columns with 107 upvote ans
+    text = e.get_payload()
+    #below is used when we don't use a transformer which cleans for us
+    text = text.lower()
+    text = text.translate(str.maketrans('', '', string.punctuation))
+    text = text.replace('\n', ' ')
+    text = ' '.join(text.split())
+    text = text.replace(to_remove, "")
+    dictx['body'] = text
+
+    
+    return dictx
+
+df = df.apply(extract_metadata, axis='columns', result_type='expand')
+#df = pd.concat([df, df_parsed], axis='columns')
+
+#%%
+#Cleaning the date column
+def change_type(dates):
+    column = []
+    
+    for date in dates:
+        try:
+            column.append(parser.parse(date).strftime("%d-%m-%Y %H:%M:%S"))
+        except:
+            column.append("Error")
+    return column
+
+df['Date'] = change_type(df['Date'])
+# %%
+df.to_csv(r'../data/emails_clean.csv', index = False)
+# %%

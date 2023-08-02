@@ -1,0 +1,104 @@
+#%%
+import re
+import nltk
+## for plotting
+import matplotlib.pyplot as plt
+#import seaborn as sns
+## for d2v
+import gensim
+import gensim.downloader as gensim_api
+from gensim.utils import simple_preprocess
+from gensim.parsing.preprocessing import strip_tags
+from gensim.models.doc2vec import TaggedDocument, Doc2Vec
+
+import pandas as pd
+import numpy as np
+from sklearn import metrics, manifold
+
+import nltk
+nltk.download('vader_lexicon')
+from nltk.sentiment.vader import SentimentIntensityAnalyzer
+
+
+#CODE PROCESSES ABOUT 233 OBSERVATIONS/SECOND with a 517k dataset
+#%%
+#load necessary files:
+nlp = gensim_api.load("glove-wiki-gigaword-300")
+sid = SentimentIntensityAnalyzer()
+df = pd.read_csv("../data/emails_clean.csv")
+#num_docs = 100
+#df = df.sample(n=num_docs, random_state=1)
+#%%
+#Useful functions
+text_col = 'body'
+self_defined_categories = ['fraud']
+
+# %%
+## Functions
+def get_similar_words(lst_words, top, nlp):
+    lst_out = lst_words
+    for tupla in nlp.most_similar(lst_words, topn=top):
+        lst_out.append(tupla[0])
+    return list(set(lst_out))
+
+def tokenize(doc):
+    return simple_preprocess(strip_tags(doc), deacc=True, min_len=2, max_len=15)
+## Create Dictionary {category:[keywords]}
+
+#%%
+#Data Processing (Tokenization)
+dic_clusters = {}
+#below is where if you wanted multiple labels you can add repeat the line below with the dictionary key being your category and then change how we save the "y" variable and then measure cosine similarity
+dic_clusters["fraud"] = get_similar_words(['fraud','cover-up','illegal','hide'], top=10, nlp=nlp)
+
+#tokenize our text data
+df['tagged_docs'] = df.apply(lambda row: TaggedDocument(tokenize(str(row[text_col])), [str(row.name)]), axis=1)
+
+#%%
+#Modeling
+model = Doc2Vec(df['tagged_docs'], vector_size=150, window=2, min_count=2, workers=-1)
+y = model.infer_vector(dic_clusters['fraud']) #creating a custom label word vector embedding
+
+#%%
+#Inference
+X = df['tagged_docs'].apply(lambda row: model.infer_vector(doc_words=row[0]))
+X = np.stack(X.values)
+
+similarities = metrics.pairwise.cosine_similarity(X, y.reshape(1,-1)) # could do pearson coefficient instead https://www.tensorflow.org/hub/tutorials/semantic_similarity_with_tf_hub_universal_encoder
+#similar_docs = model.dv.most_similar(positive=[y], topn=20)
+pd.DataFrame(similarities).describe()
+df['fraud_sim_score'] = similarities
+
+#%%
+#Plotting
+#graph the ratings and find an intuitive cutoff value
+plt.hist(similarities, 50, density=True, facecolor='g', alpha=0.75)
+plt.show()
+# %%
+bad_filter = df['similarities'] > 0.20
+testing = df.loc[bad_filter, :].groupby(['From']).agg({'similarities':['mean', 'count']})
+testing.columns = ["_".join(x) for x in testing.columns.ravel()]
+testing = testing.sort_values(["similarities_count", "similarities_mean"], ascending=False)
+testing
+#.columns
+# %%
+df.drop(labels= "tagged_docs", inplace=True, axis=1)
+df.to_csv(r'../data/emails_clean.csv', index = False)
+# %% [markdown]
+
+# Sentiment Analysis
+
+#%%
+#sid.polarity_scores(df.loc[0, 'body'])
+
+
+# %%
+def extract_sentiment(x, target_col, sent_model):
+    dictx = sent_model.polarity_scores(str(x[target_col]))
+    return dictx
+
+df[['neg', 'neu', 'pos', 'compound']] = df.apply(extract_sentiment, target_col = 'body', sent_model = sid, axis='columns', result_type='expand')
+df.head()
+# %%
+df.to_csv(r'../data/emails_clean.csv', index = False)
+# %%

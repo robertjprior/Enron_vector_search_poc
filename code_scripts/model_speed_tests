@@ -1,0 +1,216 @@
+#%%
+import re
+import nltk
+## for plotting
+import matplotlib.pyplot as plt
+#import seaborn as sns
+## for w2v
+import gensim
+import gensim.downloader as gensim_api
+## for bert
+import transformers
+
+import pandas as pd
+import numpy as np
+from sklearn import metrics, manifold
+import timeit
+
+
+
+#%%
+df = pd.read_csv("../data/emails_clean.csv")
+num_docs = 2000
+df = df.sample(n=num_docs, random_state=1)
+
+# %% [markdown]
+#LDA
+
+
+
+
+# %% [markdown]
+#Unlabeled CLassification
+
+
+# %%
+nlp = gensim_api.load("glove-wiki-gigaword-300")
+# %%
+## Function to apply
+def get_similar_words(lst_words, top, nlp):
+    lst_out = lst_words
+    for tupla in nlp.most_similar(lst_words, topn=top):
+        lst_out.append(tupla[0])
+    return list(set(lst_out))
+## Create Dictionary {category:[keywords]}
+dic_clusters = {}
+dic_clusters["fraud"] = get_similar_words(['fraud','cover-up','illegal','hide'], 
+                  top=30, nlp=nlp)
+
+#%%
+
+#use nltk to create cleaning and lemmatization etc.?
+
+
+#%% [markdown]
+## Gensim approach (100x faster than Bert)
+
+#%%
+
+
+from gensim.utils import simple_preprocess
+from gensim.parsing.preprocessing import strip_tags
+from gensim.models.doc2vec import TaggedDocument, Doc2Vec
+
+start = timeit.default_timer()
+
+def tokenize(doc):
+    return simple_preprocess(strip_tags(doc), deacc=True, min_len=2, max_len=15)
+
+df['tagged_docs'] = df.apply(lambda row: TaggedDocument(tokenize(row['body']), [str(row.name)]), axis=1)
+
+#%%
+#use gensim doc2vec (we will train on our corpus but we could use a pretrained one too)
+#how do we train on labels in addition to emails? Train first then apply it looks like I think
+model = Doc2Vec(df['tagged_docs'], vector_size=150, window=2, min_count=2, workers=-1)
+y = model.infer_vector(dic_clusters['fraud'])
+
+#%%
+#generating vectorized embedded form of emails #try swifter progress bar
+X_vectorize = lambda row: model.infer_vector(doc_words=row[0][0])
+#X = X_vectorize(df['tagged_docs'].values)
+#X = np.apply_along_axis(X_vectorize, 0, arr=df['tagged_docs'].values)
+X = df['tagged_docs'].apply(lambda row: model.infer_vector(doc_words=row[0]))
+X = np.stack(X.values)
+
+
+#%%
+#compare our x to our 
+
+#TEST THIS OUT
+#cleaned_keywords_list = list(set(dic_clusters["fraud"]).intersection(model.wv.index_to_key))
+#y = [model.wv[word] for word in cleaned_keywords_list]
+
+
+
+similarities = metrics.pairwise.cosine_similarity(X, y[0].reshape(1,-1)) #this format instead of 
+#using models.most_similar allows for out of sample testing without having added the sample and then sorting to find it
+#similar_docs = model.dv.most_similar(positive=y, topn=20)
+pd.DataFrame(similarities).describe()
+df['similarities'] = similarities.ravel()
+
+#df.sort_values(by = ['similarities'], ascending=False)['similarities']
+
+#%%
+#graph the ratings and find an intuitive cutoff value
+plt.hist(similarities, 50, density=True, facecolor='g', alpha=0.75)
+plt.show()
+
+stop = timeit.default_timer()
+print('Time in seconds: ', stop - start) 
+
+
+
+
+
+
+
+
+
+
+
+#%% [markdown]
+# Universal Sentence Encoders
+
+
+#%%
+import tensorflow as tf
+import tensorflow_hub as hub
+import numpy as np
+#%%
+module_url = "https://tfhub.dev/google/universal-sentence-encoder/4" 
+model = hub.load(module_url)
+#%%
+start = timeit.default_timer()
+
+X = model(df['body'])
+query = "I had pizza and pasta"
+query_vec = model([query])[0]
+query_vec
+
+#%%
+def utils_USE_embedding(txt, model):
+    embedding = model(txt)
+    embedding = np.array(embedding).mean(0) #it was treating each word as its own sentence/document to its own row, we are making one vector for all words
+    X = embedding.reshape(-1,)
+    return X
+
+y = {k:utils_USE_embedding(v, model) for k,v
+         in dic_clusters.items()}
+y = y['fraud'] #since we only have the one label we are building
+#%%
+#for sent in sentences:
+  #sim = cosine(query_vec, model([sent])[0])
+  #print("Sentence = ", sent, "; similarity = ", sim)
+#%%
+similarities = metrics.pairwise.cosine_similarity(X, y.reshape(1,-1)) #this format instead of 
+#using models.most_similar allows for out of sample testing without having added the sample and then sorting to find it
+#similar_docs = model.dv.most_similar(positive=[y], topn=20)
+pd.DataFrame(similarities).describe()
+df['similarities'] = similarities
+#%%
+stop = timeit.default_timer()
+print('Time in seconds: ', stop - start) 
+#%%
+
+
+
+
+
+
+#%%
+#TESTING CELL
+
+
+# %% [markdown]
+## Bert Way with transformers (10X as long as gensim)
+
+#%%
+
+from transformers import TFBertModel
+from transformers import BertTokenizer
+
+#%%
+tokenizer = transformers.BertTokenizer.from_pretrained('bert-base-uncased', do_lower_case=True, use_fast=True)
+nlp = TFBertModel.from_pretrained('bert-base-uncased')
+# %%
+## function to apply
+start = timeit.default_timer()
+def utils_bert_embedding(txt, tokenizer, nlp):
+    idx = tokenizer.encode(txt, max_length=512)
+    idx = np.array(idx)[None,:]  
+    embedding = nlp(idx)
+    X = np.array(embedding[0][0][1:-1])
+    return X
+
+
+#%%
+lst_mean_vecs = [utils_bert_embedding(txt, tokenizer, nlp).mean(0) for txt in df["body"]]
+
+X = np.array(lst_mean_vecs)
+y = {k:utils_bert_embedding(v, tokenizer, nlp).mean(0) for k,v
+         in dic_clusters.items()}['fraud']
+#put the dic_cluster as the sort of target we will measure cosine similarity against
+
+#%%
+#measure the cosine similarity and once for each obs
+X = np.nan_to_num(X)
+similarities = metrics.pairwise.cosine_similarity(X, y.reshape(1,-1))
+pd.DataFrame(similarities).describe()
+#%%
+#graph the ratings and find an intuitive cutoff value
+plt.hist(similarities, 50, density=True, facecolor='g', alpha=0.75)
+plt.show()
+# %%
+stop = timeit.default_timer()
+print('Time in seconds: ', stop - start) 
+# %%

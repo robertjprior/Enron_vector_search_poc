@@ -1,0 +1,180 @@
+#%%
+import numpy as np # linear algebra
+import pandas as pd
+#import multiprocessing
+#import seaborn as sns
+import email
+import matplotlib.pyplot as plt
+
+#data cleaning
+import datetime
+from dateutil import parser
+
+# %%
+df = pd.read_csv("../data/emails.csv")
+
+#%% [markdown]
+# Parsing out the data
+
+# %%
+# view first 5 rows of the dataset
+df.head()
+df.shape
+# %%
+print(df.loc[1]['message'])
+
+#%%
+
+
+# %%
+# transform the email into correct format
+message = df.loc[1]['message']
+e = email.message_from_string(message)
+
+e.items()
+# %%
+e.get('Date')
+# %%
+# show message body
+e.get_payload()
+
+#%%
+testing = df.loc[0:10,:].copy()
+
+#%% [markdown]
+## Option 1
+####results show it should take less than 30 min for the entire 2 GB dataset
+
+
+
+#%% [markdown]
+def extract_metadata(x): #this takes about 14 mins per GB or 250k obs
+    loc = x['message']
+    e = email.message_from_string(loc)
+    #convert entire e to a dictionary that will be added as its own row. Then pd.dataframe on list and voila
+    #dictx = dict()
+    for i,j in e.items(): #probably a speedup here from https://stackoverflow.com/questions/16236684/apply-pandas-function-to-column-to-create-multiple-new-columns with 107 upvote ans
+        x[i] = j
+    x['body'] = e.get_payload()
+    
+    return x
+
+testing.head()
+
+import timeit
+start = timeit.default_timer()
+
+testing2 = testing.apply(extract_metadata, axis=1)
+
+stop = timeit.default_timer()
+print('Time in seconds: ', stop - start) 
+
+testing2.head()
+
+#%% [markdown]
+## Option 2 Data Cleaning
+####results show it should take less than 10 mins for the entire 2 GB dataset
+# %% [markdown]
+def get_field(field, messages):
+    column = []
+    for message in messages:
+        e = email.message_from_string(message)
+        column.append(e.get(field))
+    return column
+
+def body(messages):
+    column = []
+    for message in messages:
+        e = email.message_from_string(message)
+        column.append(e.get_payload())
+    return column
+
+start = timeit.default_timer()
+
+testing3 = testing.copy()
+testing3['Message-ID'] = get_field("Message-ID", testing['message'])
+testing3['date'] = get_field("Date", testing['message'])
+testing3['subject'] = get_field("Subject", testing['message'])
+testing3['X-Folder'] = get_field("X-Folder", testing['message'])
+testing3['X-From'] = get_field("X-From", testing['message'])
+testing3['X-To'] = get_field("X-To", testing['message'])
+testing3['Mime-Version'] = get_field("Mime-version", testing['message'])
+testing3['From'] = get_field("From", testing['message'])
+testing3['To'] = get_field("To", testing['message'])
+testing3['Content-Type'] = get_field("Content-Type", testing['message'])
+testing3['Content-Transfer-Encoding'] = get_field("Content-Transfer-Encoding", testing['message'])
+testing3['X-cc'] = get_field("X-cc", testing['message'])
+testing3['X-bcc'] = get_field("X-bcc", testing['message'])
+testing3['X-Origin'] = get_field("X-Origin", testing['message'])
+testing3['X-FileName'] = get_field("X-FildeName", testing['message'])
+testing3['X'] = get_field("X", testing['message'])
+testing3['body'] = body(testing['message'])
+
+stop = timeit.default_timer()
+print('Time in seconds: ', stop - start) 
+
+
+# %% [markdown]
+## Option 3
+####results show it should take less than 1 min for the entire 2 GB dataset
+
+#%%
+def extract_metadata(x): #this takes about 14 mins per GB or 250k obs
+    loc = x['message']
+    e = email.message_from_string(loc)
+
+    dictx = dict(e.items()) #probably a speedup here from https://stackoverflow.com/questions/16236684/apply-pandas-function-to-column-to-create-multiple-new-columns with 107 upvote ans
+    dictx['body'] = e.get_payload()
+
+    
+    return dictx
+
+#%%
+testing.head()
+
+import timeit
+start = timeit.default_timer()
+
+#testing2 = testing.apply(extract_metadata, axis=1)
+testing2 = testing.apply(extract_metadata, axis='columns', result_type='expand')
+testing2 = pd.concat([testing, testing2], axis='columns')
+stop = timeit.default_timer()
+print('Time in seconds: ', stop - start) 
+
+testing2.head()
+# %% [markdown]
+# Cleaning data
+
+## Dates
+
+#%%
+def change_type(dates):
+    column = []
+    
+    for date in dates:
+        column.append(parser.parse(date).strftime("%d-%m-%Y %H:%M:%S"))
+    return column
+
+def clean_dates(x):
+    loc = x['Date']
+    x['Date'] = parser.parse(loc).strftime("%d-%m-%Y %H:%M:%S")
+    return x
+
+# %%
+testing3 = testing2.copy()
+start = timeit.default_timer()
+testing2['Date'] = change_type(testing2['Date'])
+stop = timeit.default_timer()
+print('Time in seconds: ', stop - start) 
+
+
+
+start = timeit.default_timer()
+testing3 = testing3.apply(clean_dates, axis=1)
+stop = timeit.default_timer()
+print('Time in seconds: ', stop - start) 
+# %% [markdown]
+## To/From areas
+To is separated by commas for multiple people
+
+#%%
